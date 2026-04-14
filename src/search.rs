@@ -21,11 +21,24 @@ pub fn parse_query(query: &str) -> (String, String) {
     }
 }
 
-pub fn search_files(conn: &Connection, query: &str) -> Result<Vec<SearchResult>> {
-    let (filename_filter, tags_query) = parse_query(query);
+pub fn search_files(conn: &Connection, query: &str, current_dir: &str) -> Result<Vec<SearchResult>> {
+    let is_local_search = query.starts_with('?');
+    let actual_query = if is_local_search { &query[1..] } else { query };
+    let (filename_filter, tags_query) = parse_query(actual_query);
 
     let mut sql = String::from("SELECT id, rel_path, is_dir FROM files f WHERE 1=1 ");
     let mut params_vec: Vec<String> = Vec::new();
+
+    if is_local_search {
+        if current_dir.is_empty() {
+            sql.push_str("AND f.rel_path NOT LIKE '%/%' ");
+        } else {
+            sql.push_str(&format!("AND f.rel_path LIKE ?{} ", params_vec.len() + 1));
+            params_vec.push(format!("{}/%", current_dir));
+            sql.push_str(&format!("AND f.rel_path NOT LIKE ?{} ", params_vec.len() + 1));
+            params_vec.push(format!("{}/%/%", current_dir));
+        }
+    }
 
     if !filename_filter.is_empty() {
         sql.push_str(&format!("AND f.rel_path LIKE ?{} ", params_vec.len() + 1));

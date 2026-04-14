@@ -56,7 +56,7 @@ impl App {
         let res = if self.query.is_empty() {
             search::browse_dir(conn, &self.current_dir)
         } else {
-            search::search_files(conn, &self.query)
+            search::search_files(conn, &self.query, &self.current_dir)
         };
 
         if let Ok(mut r) = res {
@@ -144,6 +144,14 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                     KeyCode::Char('/') => {
                         app.mode = AppMode::SearchInput;
                         app.input_buffer = app.query.clone();
+                    }
+                    KeyCode::Char('?') => {
+                        app.mode = AppMode::SearchInput;
+                        if app.query.starts_with('?') {
+                            app.input_buffer = app.query.clone();
+                        } else {
+                            app.input_buffer = format!("?{}", app.query);
+                        }
                     }
                     KeyCode::Char('c') => {
                         app.mode = AppMode::TagCreateInput;
@@ -432,7 +440,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     let input_title = match app.mode {
-        AppMode::Browser => " Browser ( /: search | c: create tag | t: tag file | p: play | a: play all | s: show | r: rename | Esc: clear search) ",
+        AppMode::Browser => " Browser ( /: search | ?: local | c: create tag | t: tag file | p: play | a: play all | s: show | r: rename | Esc: clear search) ",
         AppMode::SearchInput => " Search Query (Enter to apply, Esc to cancel) ",
         AppMode::TagCreateInput => " Create Tag (Syntax: newTag OR newTag:oldTag) ",
         AppMode::TagAssign => " Tag Assignment (Enter to toggle, Esc to return) ",

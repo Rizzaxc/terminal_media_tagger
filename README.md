@@ -34,6 +34,7 @@ The TUI works through intuitive keyboard bindings divided by its standard operat
 | `p` | Plays the currently focused file (or folder's content) via `vlc`. |
 | `a` | **Batch Play:** Groups all currently visible queries/files and feeds them as a playlist to `vlc`. |
 | `/` | Enter **Search Mode**. |
+| `?` | Enter **Search Mode** (Local Current Directory Only). |
 | `c` | Enter **Tag Creation Mode**. |
 | `t` | Enter **Tag Assignment Mode** for the focused item. |
 | `q` | Quit the application. |
@@ -51,15 +52,21 @@ Pressing `t` enters Tag Assignment Mode.
 * Use `Up`/`Down` and `Enter` to dynamically toggle the tag. Press `Esc` or `q` to return.
 * **Recursive Folder Tagging:** Pressing `Enter` on a directory to toggle a tag evaluates the *entire* directory tree logically: If a single file within the tree lacks the tag, it is assigned broadly to all of them. If all files already own it, it removes the tag recursively from the entire structure. 
 
-### Search Mode (`/`)
+### Search Mode (`/` and `?`)
 
 Entering search mode allows you to filter the current indexing database logic. Hitting `Enter` applies it, and hitting `Esc` returns you to standard recursive browser navigation.
 
-* First argument before a quotation is matched as a relational path.
-* Subsequent string arguments allow for complex logical evaluations matching against the database:
-  * Logical ANDing is supported: `tag1&&tag2`
-  * Logical ORing is supported: `tag1||tag2`
+* Pressing `/` searches the entire recursive tree.
+* Pressing `?` (or starting your query with `?`) restricts the search entirely to the current directory (non-recursive).
+
+* First argument before a quotation is matched as a relational path or filename filter.
+* Subsequent string arguments allow for complex logical evaluations matching against the database records:
+  * Logical ANDing is supported: `"tag1&&tag2"`
+  * Logical ORing is supported: `"tag1||tag2"`
+  * **Negative Filtering:** Prefix tags with `!` to exclude them (e.g., `!"tag"`).
+  * **Untagged Search:** Specifying `!""` isolated matches items that have NO tags attached at all.
   * E.g., `folder_name "funny&&video||meme"`
+  * E.g., `? !"music"` (Finds all files in current directory that lack the "music" tag)
 
 ## Requirements
 - Rust (`cargo`)
