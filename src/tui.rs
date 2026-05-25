@@ -181,6 +181,17 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                             }
                         }
                     }
+                    KeyCode::Char('R') => {
+                        match db::purge_stale(conn, target_dir) {
+                            Ok(count) => {
+                                app.error_msg = Some(format!("Purged {} stale entries.", count));
+                                app.load_files(conn);
+                            }
+                            Err(e) => {
+                                app.error_msg = Some(format!("Purge failed: {}", e));
+                            }
+                        }
+                    }
                     KeyCode::Char('t') => {
                         if let Some(f_idx) = app.file_state.selected() {
                             app.load_tags(conn);
@@ -440,7 +451,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     let input_title = match app.mode {
-        AppMode::Browser => " Browser ( /: search | ?: local | c: create tag | t: tag file | p: play | a: play all | s: show | r: rename | Esc: clear search) ",
+        AppMode::Browser => " Browser ( /: search | ?: local | c: create tag | t: tag file | p: play | a: play all | s: show | r: rename | R: purge | Esc: clear search) ",
         AppMode::SearchInput => " Search Query (Enter to apply, Esc to cancel) ",
         AppMode::TagCreateInput => " Create Tag (Syntax: newTag OR newTag:oldTag) ",
         AppMode::TagAssign => " Tag Assignment (Enter to toggle, Esc to return) ",

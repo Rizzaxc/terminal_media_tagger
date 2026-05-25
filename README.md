@@ -37,6 +37,8 @@ The TUI works through intuitive keyboard bindings divided by its standard operat
 | `?` | Enter **Search Mode** (Local Current Directory Only). |
 | `c` | Enter **Tag Creation Mode**. |
 | `t` | Enter **Tag Assignment Mode** for the focused item. |
+| `r` | Rename the currently focused file/folder. |
+| `R` | Purge stale paths/filenames from the database. |
 | `q` | Quit the application. |
 | `Esc` | Clear the active search query. Pressing `Esc` consecutively quits the app safely. |
 

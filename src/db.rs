@@ -8,6 +8,7 @@ pub fn init_db(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "MEMORY")?;
     conn.pragma_update(None, "synchronous", "OFF")?;
     conn.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
 
 
     // Create tables
@@ -170,4 +171,88 @@ pub fn rename_path(conn: &Connection, old_rel: &str, new_rel: &str) -> Result<()
     
     Ok(())
 }
+
+pub fn purge_stale(conn: &Connection, target_dir: &Path) -> Result<usize> {
+    let mut stmt = conn.prepare("SELECT id, rel_path FROM files")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut stale_ids = Vec::new();
+    for r in rows {
+        if let Ok((id, rel_path)) = r {
+            if !target_dir.join(&rel_path).exists() {
+                stale_ids.push(id);
+            }
+        }
+    }
+
+    let count = stale_ids.len();
+    if count == 0 {
+        return Ok(0);
+    }
+
+    for id in &stale_ids {
+        conn.execute("DELETE FROM files WHERE id = ?1", params![id])?;
+    }
+
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+
+    #[test]
+    fn test_purge_stale_and_cascade() -> Result<()> {
+        let temp_root = std::env::temp_dir().join(format!("tui_tagger_test_{}", std::process::id()));
+        fs::create_dir_all(&temp_root).expect("Failed to create temp dir");
+
+        let db_path = temp_root.join("test.db");
+        let conn = init_db(&db_path)?;
+
+        // Create a dummy file on disk
+        let file_path = temp_root.join("real_file.txt");
+        File::create(&file_path).expect("Failed to create file");
+
+        // Insert two entries in database: one exists on disk, one does not
+        conn.execute("INSERT INTO files (rel_path, is_dir) VALUES ('real_file.txt', 0)", [])?;
+        conn.execute("INSERT INTO files (rel_path, is_dir) VALUES ('stale_file.txt', 0)", [])?;
+
+        // Retrieve file IDs
+        let real_id: i64 = conn.query_row("SELECT id FROM files WHERE rel_path = 'real_file.txt'", [], |r| r.get(0))?;
+        let stale_id: i64 = conn.query_row("SELECT id FROM files WHERE rel_path = 'stale_file.txt'", [], |r| r.get(0))?;
+
+        // Add a tag and associate with both
+        add_tag(&conn, "test_tag", None)?;
+        let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name = 'test_tag'", [], |r| r.get(0))?;
+        conn.execute("INSERT INTO file_tags (file_id, tag_id) VALUES (?1, ?2)", params![real_id, tag_id])?;
+        conn.execute("INSERT INTO file_tags (file_id, tag_id) VALUES (?1, ?2)", params![stale_id, tag_id])?;
+
+        // Verify tags are associated
+        let file_tags_count: i64 = conn.query_row("SELECT count(*) FROM file_tags", [], |r| r.get(0))?;
+        assert_eq!(file_tags_count, 2);
+
+        // Run purge
+        let purged = purge_stale(&conn, &temp_root)?;
+        assert_eq!(purged, 1);
+
+        // Verify stale_file.txt is deleted
+        let files_count: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0))?;
+        assert_eq!(files_count, 1);
+        let exists: i64 = conn.query_row("SELECT count(*) FROM files WHERE rel_path = 'stale_file.txt'", [], |r| r.get(0))?;
+        assert_eq!(exists, 0);
+
+        // Verify cascade delete worked (the file_tags row for stale_file should be gone)
+        let file_tags_count_after: i64 = conn.query_row("SELECT count(*) FROM file_tags", [], |r| r.get(0))?;
+        assert_eq!(file_tags_count_after, 1);
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_root);
+
+        Ok(())
+    }
+}
+
 
