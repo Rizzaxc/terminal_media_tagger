@@ -1,5 +1,5 @@
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -9,9 +9,26 @@ use ratatui::{
 };
 use rusqlite::Connection;
 use std::io::{self, stdout};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::{db, search};
+
+fn to_os_path(target_dir: &std::path::Path, db_rel: &str) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        target_dir.join(db_rel)
+    } else {
+        target_dir.join(db_rel.replace('\\', "/"))
+    }
+}
+
+fn vlc_command() -> Command {
+    if cfg!(target_os = "windows") {
+        Command::new(r"C:\Program Files\VideoLAN\VLC\vlc.exe")
+    } else {
+        Command::new("vlc")
+    }
+}
 
 pub enum AppMode {
     Browser,
@@ -108,6 +125,9 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
         terminal.draw(|f| ui(f, &mut app))?;
 
         if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
             app.error_msg = None; // clear generic errors on next key
 
             let is_esc = key.code == KeyCode::Esc;
@@ -160,12 +180,24 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                     KeyCode::Char('s') => {
                         if let Some(i) = app.file_state.selected() {
                             if let Some(f) = app.files.get(i) {
-                                let full_path = target_dir.join(&f.rel_path);
+                                let full_path = to_os_path(target_dir, &f.rel_path);
                                 if f.rel_path == ".." {
-                                    let current = if app.current_dir.is_empty() { target_dir.to_path_buf() } else { target_dir.join(&app.current_dir) };
-                                    let _ = Command::new("open").arg(&current).spawn();
+                                    let current = if app.current_dir.is_empty() {
+                                        target_dir.to_path_buf()
+                                    } else {
+                                        to_os_path(target_dir, &app.current_dir)
+                                    };
+                                    if cfg!(target_os = "windows") {
+                                        let _ = Command::new("explorer").arg(&current).spawn();
+                                    } else {
+                                        let _ = Command::new("open").arg(&current).spawn();
+                                    }
                                 } else {
-                                    let _ = Command::new("open").arg("-R").arg(&full_path).spawn();
+                                    if cfg!(target_os = "windows") {
+                                        let _ = Command::new("explorer").arg("/select,").arg(&full_path).spawn();
+                                    } else {
+                                        let _ = Command::new("open").arg("-R").arg(&full_path).spawn();
+                                    }
                                 }
                             }
                         }
@@ -210,16 +242,16 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                         let mut paths = Vec::new();
                         if key.code == KeyCode::Char('a') {
                             for f in &app.files {
-                                paths.push(target_dir.join(&f.rel_path));
+                                paths.push(to_os_path(target_dir, &f.rel_path));
                             }
                         } else if let Some(i) = app.file_state.selected() {
                             if let Some(f) = app.files.get(i) {
-                                paths.push(target_dir.join(&f.rel_path));
+                                paths.push(to_os_path(target_dir, &f.rel_path));
                             }
                         }
 
                         if !paths.is_empty() {
-                            let mut cmd = Command::new("vlc");
+                            let mut cmd = vlc_command();
                             for p in paths {
                                 cmd.arg(p);
                             }
@@ -240,8 +272,8 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                             if let Some(f) = app.files.get(i) {
                                 if f.is_dir {
                                     if f.rel_path == ".." {
-                                        if let Some(last_slash) = app.current_dir.rfind('/') {
-                                            app.current_dir.truncate(last_slash);
+                                        if let Some(last_sep) = app.current_dir.rfind('\\') {
+                                            app.current_dir.truncate(last_sep);
                                         } else {
                                             app.current_dir.clear();
                                         }
@@ -252,8 +284,8 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                                     app.file_state.select(Some(0));
                                     app.load_files(conn);
                                 } else {
-                                    let mut cmd = Command::new("vlc");
-                                    cmd.arg(target_dir.join(&f.rel_path));
+                                    let mut cmd = vlc_command();
+                                    cmd.arg(to_os_path(target_dir, &f.rel_path));
                                     cmd.stdin(Stdio::null())
                                        .stdout(Stdio::null())
                                        .stderr(Stdio::null());
@@ -319,13 +351,13 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                             if let Some(t_idx) = app.tag_state.selected() {
                                 if let Some(f) = app.files.get(f_idx).cloned() {
                                     let tag_name = app.tags[t_idx].clone();
-                                    
+
                                     let toggled = if f.is_dir {
                                         db::toggle_folder_tag_by_name(conn, &f.rel_path, &tag_name).unwrap_or(false)
                                     } else {
                                         db::toggle_file_tag_by_name(conn, f.id, &tag_name).unwrap_or(false)
                                     };
-                                    
+
                                     if toggled {
                                         app.active_file_tags.insert(tag_name);
                                     } else {
@@ -343,16 +375,16 @@ pub fn run(conn: &mut Connection, target_dir: &std::path::Path) -> io::Result<()
                         if !input.is_empty() {
                             if let Some(i) = app.file_state.selected() {
                                 if let Some(f) = app.files.get(i).cloned() {
-                                    let old_full_path = target_dir.join(&f.rel_path);
+                                    let old_full_path = to_os_path(target_dir, &f.rel_path);
                                     let parent = old_full_path.parent();
-                                    
+
                                     if let Some(p) = parent {
                                         let new_full_path = p.join(input);
-                                        
+
                                         match std::fs::rename(&old_full_path, &new_full_path) {
                                             Ok(_) => {
                                                 if let Ok(new_rel_path) = new_full_path.strip_prefix(target_dir) {
-                                                    let new_rel_str = new_rel_path.to_string_lossy().to_string();
+                                                    let new_rel_str = new_rel_path.to_string_lossy().replace('/', "\\");
                                                     let _ = db::rename_path(conn, &f.rel_path, &new_rel_str);
                                                     app.error_msg = Some("Renamed successfully.".to_string());
                                                 }
@@ -407,14 +439,14 @@ fn ui(f: &mut Frame, app: &mut App) {
             ".. (up)".to_string()
         } else if file.is_dir {
             if app.query.is_empty() {
-                let prefix = if app.current_dir.is_empty() { String::new() } else { format!("{}/", app.current_dir) };
+                let prefix = if app.current_dir.is_empty() { String::new() } else { format!("{}\\", app.current_dir) };
                 format!("📁 {}", &file.rel_path[prefix.len()..])
             } else {
                 format!("📁 {}", file.rel_path)
             }
         } else {
             if app.query.is_empty() {
-                let prefix = if app.current_dir.is_empty() { String::new() } else { format!("{}/", app.current_dir) };
+                let prefix = if app.current_dir.is_empty() { String::new() } else { format!("{}\\", app.current_dir) };
                 file.rel_path[prefix.len()..].to_string()
             } else {
                 file.rel_path.clone()
@@ -466,7 +498,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     let input_widget = Paragraph::new(input_text)
         .block(Block::default().title(input_title).borders(Borders::ALL));
     f.render_widget(input_widget, chunks[1]);
-    
+
     let info_text = if let Some(ref msg) = app.error_msg {
         msg.clone()
     } else {

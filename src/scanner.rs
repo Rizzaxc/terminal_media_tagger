@@ -6,7 +6,7 @@ pub fn scan_dir(conn: &mut Connection, root_dir: &Path) -> Result<()> {
     let tx = conn.transaction()?;
 
     // Purge any hidden files or AppleDouble files that might already be in the database
-    tx.execute("DELETE FROM files WHERE rel_path LIKE '.%' OR rel_path LIKE '%/.%'", params![])?;
+    tx.execute("DELETE FROM files WHERE rel_path LIKE '.%' OR rel_path LIKE '%\\.%' ESCAPE '!'", params![])?;
 
     let walker = WalkDir::new(root_dir).into_iter().filter_entry(|e| {
         !e.file_name()
@@ -38,12 +38,12 @@ pub fn scan_dir(conn: &mut Connection, root_dir: &Path) -> Result<()> {
             if rel_path.as_os_str().is_empty() {
                 continue; // Root directory itself
             }
-            let rel_str = rel_path.to_string_lossy();
+            let rel_str = rel_path.to_string_lossy().replace('/', "\\");
             let is_dir = entry.file_type().is_dir();
 
             tx.execute(
                 "INSERT OR IGNORE INTO files (rel_path, is_dir) VALUES (?1, ?2)",
-                params![rel_str.as_ref(), is_dir as i32],
+                params![&rel_str, is_dir as i32],
             )?;
         }
     }

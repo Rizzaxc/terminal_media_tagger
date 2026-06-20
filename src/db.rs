@@ -102,14 +102,14 @@ pub fn toggle_file_tag_by_name(conn: &Connection, file_id: i64, tag_name: &str) 
 }
 
 pub fn get_tags_for_folder(conn: &Connection, folder_rel_path: &str) -> Result<Vec<String>> {
-    let folder_prefix = format!("{}/%", folder_rel_path);
+    let folder_prefix = format!("{}\\%", folder_rel_path);
     let mut stmt = conn.prepare(
         "SELECT t.name FROM tags t
          JOIN file_tags ft ON t.id = ft.tag_id
          JOIN files f ON ft.file_id = f.id
-         WHERE f.rel_path LIKE ?1 AND f.is_dir = 0
+         WHERE f.rel_path LIKE ?1 ESCAPE '!' AND f.is_dir = 0
          GROUP BY t.id
-         HAVING COUNT(f.id) = (SELECT COUNT(*) FROM files WHERE rel_path LIKE ?1 AND is_dir = 0)
+         HAVING COUNT(f.id) = (SELECT COUNT(*) FROM files WHERE rel_path LIKE ?1 ESCAPE '!' AND is_dir = 0)
          ORDER BY t.name"
     )?;
     let rows = stmt.query_map(params![folder_prefix, folder_prefix], |row| row.get(0))?;
@@ -124,11 +124,11 @@ pub fn toggle_folder_tag_by_name(conn: &Connection, folder_rel_path: &str, tag_n
     let mut stmt = conn.prepare("SELECT id FROM tags WHERE name = ?1")?;
     let tag_id: i64 = stmt.query_row(params![tag_name], |row| row.get(0))?;
 
-    let folder_prefix = format!("{}/%", folder_rel_path);
+    let folder_prefix = format!("{}\\%", folder_rel_path);
 
     let missing_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM files f 
-         WHERE f.rel_path LIKE ?1 AND f.is_dir = 0 AND f.id NOT IN (
+        "SELECT COUNT(*) FROM files f
+         WHERE f.rel_path LIKE ?1 ESCAPE '!' AND f.is_dir = 0 AND f.id NOT IN (
              SELECT file_id FROM file_tags WHERE tag_id = ?2
          )",
         params![folder_prefix, tag_id],
@@ -138,15 +138,15 @@ pub fn toggle_folder_tag_by_name(conn: &Connection, folder_rel_path: &str, tag_n
     if missing_count > 0 {
         conn.execute(
             "INSERT OR IGNORE INTO file_tags (file_id, tag_id)
-             SELECT id, ?2 FROM files WHERE rel_path LIKE ?1 AND is_dir = 0",
+             SELECT id, ?2 FROM files WHERE rel_path LIKE ?1 ESCAPE '!' AND is_dir = 0",
             params![folder_prefix, tag_id]
         )?;
         Ok(true)
     } else {
         conn.execute(
-            "DELETE FROM file_tags 
+            "DELETE FROM file_tags
              WHERE tag_id = ?2 AND file_id IN (
-                 SELECT id FROM files WHERE rel_path LIKE ?1 AND is_dir = 0
+                 SELECT id FROM files WHERE rel_path LIKE ?1 ESCAPE '!' AND is_dir = 0
              )",
              params![folder_prefix, tag_id]
         )?;
@@ -162,10 +162,10 @@ pub fn rename_path(conn: &Connection, old_rel: &str, new_rel: &str) -> Result<()
     )?;
     
     // children match
-    let old_prefix = format!("{}/%", old_rel);
+    let old_prefix = format!("{}\\%", old_rel);
     let old_len = old_rel.len() as i32;
     conn.execute(
-        "UPDATE files SET rel_path = ?1 || SUBSTR(rel_path, ?2 + 1) WHERE rel_path LIKE ?3",
+        "UPDATE files SET rel_path = ?1 || SUBSTR(rel_path, ?2 + 1) WHERE rel_path LIKE ?3 ESCAPE '!'",
         params![new_rel, old_len, old_prefix],
     )?;
     
@@ -173,6 +173,14 @@ pub fn rename_path(conn: &Connection, old_rel: &str, new_rel: &str) -> Result<()
 }
 
 pub fn purge_stale(conn: &Connection, target_dir: &Path) -> Result<usize> {
+    // Delete forward-slash entries that already have a backslash equivalent
+    conn.execute(
+        "DELETE FROM files WHERE rel_path LIKE '%/%' AND REPLACE(rel_path, '/', '\\') IN (SELECT rel_path FROM files WHERE rel_path NOT LIKE '%/%')",
+        params![],
+    )?;
+    // Normalize remaining forward-slash paths to backslash
+    conn.execute("UPDATE files SET rel_path = REPLACE(rel_path, '/', '\\') WHERE rel_path LIKE '%/%'", params![])?;
+
     let mut stmt = conn.prepare("SELECT id, rel_path FROM files")?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -181,7 +189,12 @@ pub fn purge_stale(conn: &Connection, target_dir: &Path) -> Result<usize> {
     let mut stale_ids = Vec::new();
     for r in rows {
         if let Ok((id, rel_path)) = r {
-            if !target_dir.join(&rel_path).exists() {
+            let os_rel = if cfg!(target_os = "windows") {
+                rel_path.clone()
+            } else {
+                rel_path.replace('\\', "/")
+            };
+            if !target_dir.join(&os_rel).exists() {
                 stale_ids.push(id);
             }
         }

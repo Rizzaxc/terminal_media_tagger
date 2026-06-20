@@ -31,12 +31,12 @@ pub fn search_files(conn: &Connection, query: &str, current_dir: &str) -> Result
 
     if is_local_search {
         if current_dir.is_empty() {
-            sql.push_str("AND f.rel_path NOT LIKE '%/%' ");
+            sql.push_str("AND f.rel_path NOT LIKE '%\\%' ESCAPE '!' ");
         } else {
-            sql.push_str(&format!("AND f.rel_path LIKE ?{} ", params_vec.len() + 1));
-            params_vec.push(format!("{}/%", current_dir));
-            sql.push_str(&format!("AND f.rel_path NOT LIKE ?{} ", params_vec.len() + 1));
-            params_vec.push(format!("{}/%/%", current_dir));
+            sql.push_str(&format!("AND f.rel_path LIKE ?{} ESCAPE '!' ", params_vec.len() + 1));
+            params_vec.push(format!("{}\\%", current_dir));
+            sql.push_str(&format!("AND f.rel_path NOT LIKE ?{} ESCAPE '!' ", params_vec.len() + 1));
+            params_vec.push(format!("{}\\%\\%", current_dir));
         }
     }
 
@@ -63,14 +63,14 @@ pub fn search_files(conn: &Connection, query: &str, current_dir: &str) -> Result
                     trimmed
                 };
                 let tag = inner.trim_matches('"');
-                
+
                 if tag.is_empty() {
                     if is_negated {
                         and_clauses.push("f.id NOT IN (SELECT file_id FROM file_tags)".to_string());
                     }
                     continue;
                 }
-                
+
                 params_vec.push(tag.to_string());
                 let idx = params_vec.len();
                 let operator = if is_negated { "NOT IN" } else { "IN" };
@@ -94,7 +94,7 @@ pub fn search_files(conn: &Connection, query: &str, current_dir: &str) -> Result
     // Rust needs params as a heterogeneous sequence of ToSql, but here it's simple strings.
     // rusqlite allows executing from slice of ToSql.
     let mut stmt = conn.prepare(&sql)?;
-    
+
     // We must pass references
     let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
 
@@ -110,20 +110,20 @@ pub fn search_files(conn: &Connection, query: &str, current_dir: &str) -> Result
     for r in rows {
         results.push(r?);
     }
-    
+
     Ok(results)
 }
 
 pub fn browse_dir(conn: &Connection, current_dir: &str) -> Result<Vec<SearchResult>> {
     let (sql, params): (&str, Vec<String>) = if current_dir.is_empty() {
-        ("SELECT id, rel_path, is_dir FROM files WHERE rel_path NOT LIKE '%/%' ORDER BY is_dir DESC, rel_path COLLATE NOCASE ASC", vec![])
+        ("SELECT id, rel_path, is_dir FROM files ORDER BY is_dir DESC, rel_path COLLATE NOCASE ASC", vec![])
     } else {
-        ("SELECT id, rel_path, is_dir FROM files WHERE rel_path LIKE ?1 ORDER BY is_dir DESC, rel_path COLLATE NOCASE ASC", vec![format!("{}/%", current_dir)])
+        ("SELECT id, rel_path, is_dir FROM files WHERE rel_path LIKE ?1 ESCAPE '!' ORDER BY is_dir DESC, rel_path COLLATE NOCASE ASC", vec![format!("{}\\%", current_dir)])
     };
-    
+
     let mut stmt = conn.prepare(sql)?;
     let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-    
+
     let rows = stmt.query_map(&params_refs[..], |row| {
         Ok(SearchResult {
             id: row.get(0)?,
@@ -132,24 +132,20 @@ pub fn browse_dir(conn: &Connection, current_dir: &str) -> Result<Vec<SearchResu
         })
     })?;
 
-    let mut results = Vec::new();
     let prefix = if current_dir.is_empty() {
         String::new()
     } else {
-        format!("{}/", current_dir)
+        format!("{}\\", current_dir)
     };
 
+    let mut results = Vec::new();
     for r in rows {
         let res: SearchResult = r?;
-        if current_dir.is_empty() {
+        let remainder = &res.rel_path[prefix.len()..];
+        if !remainder.contains('\\') {
             results.push(res);
-        } else {
-            let remainder = &res.rel_path[prefix.len()..];
-            if !remainder.contains('/') {
-                results.push(res);
-            }
         }
     }
-    
+
     Ok(results)
 }
